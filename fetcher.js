@@ -1,18 +1,12 @@
 require("dotenv").config()
 const axios = require('axios');
 
-const crypto = require('crypto')
 const rateLimit = require('axios-rate-limit');
 
 const http = rateLimit(axios.create(), { maxRequests: 2, perMilliseconds: 1000, maxRPS: 2 }) // throttle webhook requests. Works fine.
  
-const makeHash = (data) => {
-    const dt = new Date();
-    data["date"] = (dt.getDay()+1).toString() + "." + (dt.getMonth()+1).toString();
-    return crypto.createHash('md5').update(JSON.stringify(data)).digest('hex') // bonk, very ugly I know.
-}
 
-const send_webhook_embed = async(data) => {
+const prep_embed = (data) => {
     let embed = {
         title: "",
         description: data.cancelled ? "⚠⚠⚠ **ZUG FÄLLT AUS** ⚠⚠⚠" : "", // why am I even commenting this in english
@@ -22,46 +16,56 @@ const send_webhook_embed = async(data) => {
         },
         fields: [{
                 name: "Abfahrt",
-                value: `${data.plan_departure}\n${data.actual_departure !== data.plan_departure ? "\n⌚⚠ **Verspätung**: "+data.actual_departure + " (**+"+ data.delay_mins.toString()+"**)" : ""}`,
+                value: data.plan_departure === data.actual_departure ? data.plan_departure : `⌚⚠ **Verspätet**: ${data.actual_departure} (**+${data.delay_mins.toString()}**)\n\n*Ursprünglich: ${data.plan_departure}*`,
                 inline: true
             },
             {
                 name: "Gleis",
                 value: data.platform,
                 inline: true
-            },
-            {
-                name: "Meldungen", // senk you for traeveling
-                value: data.messages.delay + "\n\n" + data.messages.qos + "\n\n" + data.messages.zugI,
-                inline: false
             }
         ]
 
-
     }
-    if(!data.messages.delay && !data.messages.qos && !data.messages.zugI) {
-        embed.fields.pop()
+    if(data.messages && data.messages.join("\n") > 5 && data.messages.join("\n").length < 1000) {
+        embed.fields.push({
+            name: "Meldungen", // senk you for traeveling
+            value: data.messages.join("\n"),
+            inline: false
+        })
+    } else if(data.messages && data.messages.join("\n") > 5) {
+       let out = []
+       let curr = ""
+       data.messages.forEach(el => {
+        if(curr.length+el.length > 1000) {
+            out.push(curr);
+            curr = el + "\n"
+        } else {
+            curr += el + "\n"
+        }
+       })
+       if(curr.length>1) {
+        out.push(curr.substring(0,curr.length-1))
+       }
+       for(let i = 0; i < out.length; i++) {
+        embed.fields.push({
+            name: i === 0 ? "Meldungen" : "_ _",
+            value: out[i],
+            inline: false
+        })
+       }
     }
-    let msgid;
-    try {
-        const msg = await http.post(data.start_bf.includes(process.env.HOME_VARIANT) ? process.env.HOME_WH+"?wait=true" : process.env.WORK_WH+"?wait=true", { // dont code like me kids mkay
+    return {
             embeds: [embed],
             username: "Bahnhof " + data.start_bf,
             avatar_url: data.start_bf.includes(process.env.HOME_VARIANT) ? process.env.HOME_IMAGE : process.env.WORK_IMAGE
-        })
-
-        msgid = msg.data.id;
-    } catch (e) {
-        console.error(e)
     }
-    return ((data.start_bf.includes(process.env.HOME_VARIANT) ? process.env.HOME_WH : process.env.WORK_WH)+"/messages/"+msgid) ?? "1234567899"; // lol this really needs refactor
 
 }
 const fetch_station = async(station_id, train_names) => {
-    const fetch_url = `https://marudor.de/api/iris/v2/abfahrten/${station_id}?lookahead=90&lookbehind=10`; // hardcoding aka shitcoding
+    const fetch_url = `https://marudor.de/api/iris/v2/abfahrten/${station_id}?lookahead=480&lookbehind=10`; // hardcoding aka shitcoding
     const reqD = await axios.get(fetch_url);
     let jsonDat = reqD.data.departures.filter(tt => train_names.includes(tt.train.name));
-
 
     const pase = jsonDat.reduce(function(lst, train){
 
@@ -80,11 +84,11 @@ const fetch_station = async(station_id, train_names) => {
         
         let [delM, accM, zugI] = [train.messages.delay, train.messages.qos, train.messages.him];
         const parseMsg = (m) => {return m.map((m) => {
-            const datx = new Date(m.timestamp) // dont look at how I format the dates. Also the month/day display is broken.
-            return (datx.getDay()+1).toString()+ "." + (datx.getMonth()+1).toString()+ ". "+datx.getHours().toString().padStart(2, '0') + ":" + datx.getMinutes().toString().padStart(2, '0')+ ": " + m.text
+            return "▫️ "+ m.text.trim()
         })};
-    
-        let messages = {delay: parseMsg(delM).join("\n"), qos: parseMsg(accM).join("\n"), zugI: parseMsg(zugI).join("\n")};
+        let messages = [...parseMsg(delM), ...parseMsg(accM), ...parseMsg(zugI)]
+
+        
         lst.push({
             name: train.train.name,
             destination: train.destination,
@@ -106,60 +110,66 @@ const fetch_station = async(station_id, train_names) => {
 
     
 }
+const fillEmpty = async() => {
+    let slots_a = []
+    let slots_b = []
+    for(let i = 0; i < 5; i++) {
+        const resp = await http.post( process.env.HOME_WH+"?wait=true", {embeds: [{title: "Information", description: "Keine weiteren Fahrten verfügbar."}]})
+        slots_a.push( {url: process.env.HOME_WH +  "/messages/" +resp.data.id})
+    }
+    for(let i = 0; i < 5; i++) {
+        const resp = await http.post( process.env.WORK_WH+"?wait=true", {embeds: [{title: "Information", description: "Keine weiteren Fahrten verfügbar."}]})
+        slots_b.push( {url: process.env.WORK_WH + "/messages/" +resp.data.id})
+    }
+    return [slots_a, slots_b]
+}
 const poller = async() => {
-    let traindata = {}
+
+    let [slots_a, slots_b] = await fillEmpty();
     while(true) {
         try {
             let [stat1, stat2] = await Promise.all([fetch_station(process.env.HOME_ID, process.env.TRAINS.split(",")),fetch_station(process.env.WORK_ID, process.env.TRAINS.split(","))]); // very ugly code
-            let [stat1_hash, stat2_hash] = [stat1.map(tt => makeHash(tt)), stat2.map(tt => makeHash(tt))]; // tracking changes by hashing objects is very unprofessional.
-            let current_hashes = Object.values(traindata).map(tt => tt.hash);
-            for(let i = 0; i < stat1_hash.length; i++) {
-                if(!current_hashes.includes(stat1_hash[i])) {
-    
-                    const wh_out = await send_webhook_embed(stat1[i]);
-                    if(traindata[stat1[i].trainid]) {
-                        try {
-                            await http.delete(traindata[stat1[i].trainid].del_url);
-                        } catch(err){}
-                        
-                    }
-                    traindata[stat1[i].trainid] = {
-                        del_url: wh_out,
-                        hash: stat1_hash[i],
-                        delete_at: stat1[i].actual_unix + 60 * 15 // bug: if a train has 20 mins delay, it's gone.
-                    }
+            let send_a = []
+            let send_b = []
+            for(let i = stat1.length-1; i >= 0; i--) {
+                    send_a.push({
+                        relevant: {
+                            id: stat1[i].trainid,
+                            actual: stat1[i].actual_unix,
+                            home: true
+                        },
+                        emb_data: prep_embed(stat1[i])
+                    })
+            }
+            for(let i = stat2.length-1; i >= 0; i--) {
+
+                    send_b.push({
+                        relevant: {
+                            id: stat2[i].trainid,
+                            actual: stat2[i].actual_unix,
+                            home: false
+                        },
+                        emb_data: prep_embed(stat2[i])
+                    })
+            }
+ 
+            send_a = send_a.sort((a,b) => a.relevant.actual - b.relevant.actual).slice(0,5).reverse()
+            send_b = send_b.sort((a,b) => a.relevant.actual - b.relevant.actual).slice(0,5).reverse()
+            for(let i = 0; i < 5; i++) {
+                 if(slots_a[i].data !== send_a[i].emb_data) {
+                    await http.patch(slots_a[i].url, send_a[i].emb_data)
+                    slots_a[i].data = send_a[i].emb_data
                 }
             }
-            for(let i = 0; i < stat2_hash.length; i++) { 
-                if(!current_hashes.includes(stat2_hash[i])) {
-    
-                    const wh_out = await send_webhook_embed(stat2[i]);
-                    if(traindata[stat2[i].trainid]) {
-                        try {
-                            await http.delete(traindata[stat2[i].trainid].del_url);
-                        } catch(err){}
-                        
-                    }
-                    traindata[stat2[i].trainid] = {
-                        del_url: wh_out,
-                        hash: stat2_hash[i],
-                        delete_at: stat2[i].actual_unix + 60 * 15 // bug: if a train has 20 mins delay, it's gone.
-                    }
+            for(let i = 0; i < 5; i++) {
+                if(slots_b[i].data !== send_b[i].emb_data) {
+                    await http.patch(slots_b[i].url, send_b[i].emb_data)
+                    slots_b[i].data = send_b[i].emb_data
                 }
             }
-            const curt = Date.now() / 1000;
-            Object.values(traindata).filter(tt => tt.delete_at < curt).forEach(tt => {
-                try {
-                    http.delete(tt.del_url);
-                } catch(err){}
-            })
-            traindata = Object.fromEntries(Object.entries(traindata).filter(tt => tt[1].delete_at >= curt));
-    
         } catch(err) {
             console.error(err)
         }
-
-
 
         await new Promise(resolve => setTimeout(resolve, 20000));
     }
