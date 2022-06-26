@@ -27,13 +27,13 @@ const prep_embed = (data) => {
         ]
 
     }
-    if(data.messages && data.messages.join("\n") > 5 && data.messages.join("\n").length < 1000) {
+    if(data.messages && data.messages.join("\n").length > 5 && data.messages.join("\n").length < 1000) {
         embed.fields.push({
             name: "Meldungen", // senk you for traeveling
             value: data.messages.join("\n"),
             inline: false
         })
-    } else if(data.messages && data.messages.join("\n") > 5) {
+    } else if(data.messages && data.messages.join("\n").length > 5) {
        let out = []
        let curr = ""
        data.messages.forEach(el => {
