@@ -152,16 +152,17 @@ const poller = async() => {
                         emb_data: prep_embed(stat2[i])
                     })
             }
- 
+            console.log("STAT1", stat1)
+            console.log("STAT2", stat2)
             send_a = send_a.sort((a,b) => a.relevant.actual - b.relevant.actual).slice(0,5).reverse()
             send_b = send_b.sort((a,b) => a.relevant.actual - b.relevant.actual).slice(0,5).reverse()
-            for(let i = 0; i < 5; i++) {
+            for(let i = 0; i < Math.min(5, send_a.length); i++) {
                  if(slots_a[i].data !== send_a[i].emb_data) {
                     await http.patch(slots_a[i].url, send_a[i].emb_data)
                     slots_a[i].data = send_a[i].emb_data
                 }
             }
-            for(let i = 0; i < 5; i++) {
+            for(let i = 0; i < Math.min(5, send_b.length); i++) {
                 if(slots_b[i].data !== send_b[i].emb_data) {
                     await http.patch(slots_b[i].url, send_b[i].emb_data)
                     slots_b[i].data = send_b[i].emb_data
