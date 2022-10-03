@@ -63,7 +63,7 @@ const prep_embed = (data) => {
 
 }
 const fetch_station = async(station_id, train_names) => {
-    const fetch_url = `https://marudor.de/api/iris/v2/abfahrten/${station_id}?lookahead=480&lookbehind=10`; // hardcoding aka shitcoding
+    const fetch_url = `https://bahn.expert/api/iris/v2/abfahrten/${station_id}?lookahead=480&lookbehind=10`; // hardcoding aka shitcoding
     const reqD = await axios.get(fetch_url);
     let jsonDat = reqD.data.departures.filter(tt => train_names.includes(tt.train.name));
 
